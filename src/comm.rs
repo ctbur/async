@@ -1,14 +1,12 @@
-use log::{debug, error};
+use log::{debug, info};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::os::unix::net;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use super::error::{Error, Result};
 use super::exec;
 use super::{CmdOp, Operation, ServerOp, WaitOp};
-
-const MAX_CONSEC_ERRS: i32 = 3;
 
 pub fn execute_operation<P: AsRef<Path>>(socket_path: P, op: Operation) -> Result<()> {
     match op {
@@ -20,29 +18,31 @@ pub fn execute_operation<P: AsRef<Path>>(socket_path: P, op: Operation) -> Resul
 
 fn execute_server_op<P: AsRef<Path>>(socket_path: P, op: ServerOp) -> Result<()> {
     if op.start || op.stop {
+        // try stop server by communication, otherwise kill
         // Problems: timeout, error reporting
         //let client = Client::connect(socket_path, Protocol::Cmd)?;
         //client.transmit(op)?;
     }
     if op.start {
-        exec::start_server(&socket_path);
+        let pid = exec::start_server(&socket_path, op)?;
+        info!("Server running at PID {}", pid);
+    } else {
+        let conn = Connection::connect(&socket_path, Protocol::Config)?;
+        conn.transmit(op)?;
     }
-
-    let client = Client::connect(&socket_path, Protocol::Config)?;
-    client.transmit(op)?;
 
     return Ok(());
 }
 
 fn execute_cmd_op<P: AsRef<Path>>(socket_path: P, op: CmdOp) -> Result<()> {
-    let client = Client::connect(socket_path, Protocol::Cmd)?;
-    client.transmit(op)?;
+    let conn = Connection::connect(socket_path, Protocol::Cmd)?;
+    conn.transmit(op)?;
     Ok(())
 }
 
 fn execute_wait_op<P: AsRef<Path>>(socket_path: P, op: WaitOp) -> Result<()> {
-    let client = Client::connect(socket_path, Protocol::Wait)?;
-    client.transmit(op)?;
+    let conn = Connection::connect(socket_path, Protocol::Wait)?;
+    conn.transmit(op)?;
     // receive response
     Ok(())
 }
@@ -55,16 +55,16 @@ enum Protocol {
     Wait,
 }
 
-struct Client {
+struct Connection {
     connection: net::UnixStream,
 }
 
-impl Client {
+impl Connection {
     fn connect<P: AsRef<Path>>(socket_path: P, protocol: Protocol) -> Result<Self> {
-        let client = Client {
+        let client = Self {
             connection: net::UnixStream::connect(socket_path)?,
         };
-        client.transmit(protocol);
+        client.transmit(protocol)?;
         return Ok(client);
     }
 
@@ -79,32 +79,50 @@ impl Client {
     }
 }
 
-pub struct Config {
-    pub num_threads: u32,
-}
+pub fn run_server<P: AsRef<Path>>(socket_path: P, executor: exec::Executor) -> Result<()> {
+    let server = Server::create(socket_path)?;
 
-pub fn run_server<P: AsRef<Path>>(socket_path: P, config: Config) -> Result<()> {
-    let mut server = Server::create(socket_path, config)?;
-    return server.run();
+    loop {
+        let conn = server.accept()?;
+        let protocol: Protocol = conn.receive()?;
+
+        match protocol {
+            Protocol::Cmd => {
+                let op: CmdOp = conn.receive()?;
+                executor.run_cmd(op);
+            },
+            Protocol::Config => {
+                let op: ServerOp = conn.receive()?;
+                executor.reconfigure(op);
+            },
+            Protocol::Wait => {
+                let op: WaitOp = conn.receive()?;
+                executor.wait(op);
+            },
+            Protocol::Stop => {
+                executor.stop();
+            },
+        }
+    }
 }
 
 struct Server {
     socket: net::UnixListener,
-    config: Config,
-    exit_requested: bool,
 }
 
 impl Server {
-    fn create<P: AsRef<Path>>(socket_path: P, config: Config) -> Result<Server> {
+    fn create<P: AsRef<Path>>(socket_path: P) -> Result<Server> {
         let socket = net::UnixListener::bind(socket_path)?;
-        Ok(Server {
-            socket,
-            config,
-            exit_requested: false,
-        })
+        return Ok(Server { socket });
     }
 
-    fn run(&mut self) -> Result<()> {
+    fn accept(&self) -> Result<Connection> {
+        let (connection, addr) = self.socket.accept()?;
+        debug!("Client connected from address {:?}", addr);
+        return Ok(Connection { connection });
+    }
+
+    /*fn run(&mut self) -> Result<()> {
         let mut consec_errs = 0;
         while consec_errs < MAX_CONSEC_ERRS && !self.exit_requested {
             let res = self.handle_client();
@@ -125,14 +143,5 @@ impl Server {
         } else {
             Ok(())
         };
-    }
-
-    fn handle_client(&mut self) -> Result<()> {
-        let (conn, addr) = self.socket.accept()?;
-        debug!("Client connected from address {:?}", addr);
-
-        loop {
-            //let msg_opt: Option<Msg> = serde_json::from_reader(&conn)?;
-        }
-    }
+    }*/
 }
