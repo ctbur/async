@@ -79,7 +79,7 @@ impl Connection {
     }
 }
 
-pub fn run_server<P: AsRef<Path>>(socket_path: P, executor: exec::Executor) -> Result<()> {
+pub fn run_server<P: AsRef<Path>>(socket_path: P, mut executor: exec::Executor) -> Result<()> {
     let server = Server::create(socket_path)?;
 
     loop {
@@ -90,20 +90,23 @@ pub fn run_server<P: AsRef<Path>>(socket_path: P, executor: exec::Executor) -> R
             Protocol::Cmd => {
                 let op: CmdOp = conn.receive()?;
                 executor.run_cmd(op);
-            },
+            }
             Protocol::Config => {
                 let op: ServerOp = conn.receive()?;
                 executor.reconfigure(op);
-            },
+            }
             Protocol::Wait => {
                 let op: WaitOp = conn.receive()?;
                 executor.wait(op);
-            },
+            }
             Protocol::Stop => {
                 executor.stop();
-            },
+                break;
+            }
         }
     }
+
+    return Ok(());
 }
 
 struct Server {

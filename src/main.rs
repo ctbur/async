@@ -76,7 +76,7 @@ pub struct ServerOp {
     stop: bool,
     /// How many processes to run in parallel
     #[structopt(short = "j", long = "num-threads")]
-    num_threads: Option<u32>,
+    num_threads: Option<usize>,
 }
 
 #[derive(Debug, StructOpt, Serialize, Deserialize)]
