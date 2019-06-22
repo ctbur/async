@@ -84,6 +84,7 @@ pub struct ServerOp {
 pub struct WaitOp {}
 
 fn main() -> Result<()> {
+    env_logger::init();
     let opt = Opt::from_args();
     debug!("{:?}", opt);
     return comm::execute_operation(opt.socket_path, opt.op);

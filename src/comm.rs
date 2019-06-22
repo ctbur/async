@@ -21,14 +21,14 @@ fn execute_server_op<P: AsRef<Path>>(socket_path: P, op: ServerOp) -> Result<()>
         // try stop server by communication, otherwise kill
         // Problems: timeout, error reporting
         //let client = Client::connect(socket_path, Protocol::Cmd)?;
-        //client.transmit(op)?;
+        //client.transmit(&op)?;
     }
     if op.start {
         let pid = exec::start_server(&socket_path, op)?;
         info!("Server running at PID {}", pid);
     } else {
         let conn = Connection::connect(&socket_path, Protocol::Config)?;
-        conn.transmit(op)?;
+        conn.transmit(&op)?;
     }
 
     return Ok(());
@@ -36,18 +36,18 @@ fn execute_server_op<P: AsRef<Path>>(socket_path: P, op: ServerOp) -> Result<()>
 
 fn execute_cmd_op<P: AsRef<Path>>(socket_path: P, op: CmdOp) -> Result<()> {
     let conn = Connection::connect(socket_path, Protocol::Cmd)?;
-    conn.transmit(op)?;
+    conn.transmit(&op)?;
     Ok(())
 }
 
 fn execute_wait_op<P: AsRef<Path>>(socket_path: P, op: WaitOp) -> Result<()> {
     let conn = Connection::connect(socket_path, Protocol::Wait)?;
-    conn.transmit(op)?;
+    conn.transmit(&op)?;
     // receive response
     Ok(())
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 enum Protocol {
     Stop,
     Config,
@@ -64,17 +64,17 @@ impl Connection {
         let client = Self {
             connection: net::UnixStream::connect(socket_path)?,
         };
-        client.transmit(protocol)?;
+        client.transmit(&protocol)?;
         return Ok(client);
     }
 
-    fn transmit<M: Serialize>(&self, msg: M) -> Result<()> {
-        serde_json::to_writer(&self.connection, &msg)?;
+    fn transmit<M: Serialize>(&self, msg: &M) -> Result<()> {
+        bincode::serialize_into(&self.connection, &msg)?;
         return Ok(());
     }
 
     fn receive<M: DeserializeOwned>(&self) -> Result<M> {
-        let msg = serde_json::from_reader(&self.connection)?;
+        let msg = bincode::deserialize_from(&self.connection)?;
         return Ok(msg);
     }
 }
@@ -83,8 +83,10 @@ pub fn run_server<P: AsRef<Path>>(socket_path: P, mut executor: exec::Executor) 
     let server = Server::create(socket_path)?;
 
     loop {
-        let conn = server.accept()?;
+        let mut conn = server.accept()?;
+
         let protocol: Protocol = conn.receive()?;
+        debug!("Using protocol {:?}", protocol);
 
         match protocol {
             Protocol::Cmd => {

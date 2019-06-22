@@ -5,7 +5,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[derive(Debug)]
 pub enum Error {
     Io(io::Error),
-    Serde(serde_json::Error),
+    Serde(bincode::Error),
     MaxConsecErrs(),
 }
 
@@ -35,8 +35,8 @@ impl From<io::Error> for Error {
     }
 }
 
-impl From<serde_json::Error> for Error {
-    fn from(err: serde_json::Error) -> Error {
+impl From<bincode::Error> for Error {
+    fn from(err: bincode::Error) -> Error {
         Error::Serde(err)
     }
 }

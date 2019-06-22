@@ -1,4 +1,4 @@
-use log::error;
+use log::{error, info};
 use std::collections::VecDeque;
 use std::path::Path;
 use std::process;
@@ -18,7 +18,7 @@ pub fn start_server<P: AsRef<Path>>(socket_path: P, op: ServerOp) -> Result<libc
                 cmd_queue: VecDeque::new(),
                 active_processes: Vec::new(),
             };
-            let result = comm::run_server(socket_path, executor);
+            comm::run_server(socket_path, executor).unwrap();
             // TODO: log result
         })?
     };
@@ -83,6 +83,8 @@ fn start_cmd(op: CmdOp) -> Result<process::Child> {
 
     // TODO: redirect stdout, stderr and write to stdin
     let cmd_proc = process::Command::new(bin).args(args).spawn();
+    info!("Started command: {}", op.cmd.join(" "));
+
     // TODO: error handling
     return Ok(cmd_proc.unwrap());
 }
