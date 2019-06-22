@@ -1,134 +1,90 @@
-use clap::{App, Arg, SubCommand};
-use log::warn;
-use std::result;
-use std::str::FromStr;
+use log::debug;
+use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
+use structopt::StructOpt;
 
-mod error;
 use error::Result;
 
-mod peer;
+mod comm;
+mod error;
+mod exec;
 
-fn is_a<T: FromStr>(val: String) -> result::Result<(), String> {
-    match val.parse::<T>() {
-        Ok(_) => Ok(()),
-        Err(_) => Err(format!("illegal argument format: {}", val)),
-    }
+#[derive(Debug, StructOpt)]
+#[structopt(
+    name = "parallel",
+    about = "Run your commands in parallel.",
+    version = "0.1",
+    author = "Cyrill Burgener <cyrill.burgener@gmail.com>",
+    rename_all = "kebab-case"
+)]
+pub struct Opt {
+    /// The socket used for communication
+    #[structopt(short = "s", long = "socket", parse(from_os_str))]
+    socket_path: PathBuf,
+    #[structopt(subcommand)]
+    op: Operation,
 }
 
-fn parse_args<'a>() -> clap::ArgMatches<'a> {
-    let socket_path = Arg::with_name("socket_path")
-        .short("s")
-        .long("socket")
-        .takes_value(true)
-        .required(true)
-        .help("The socket used for communication");
-
-    let num_threads = Arg::with_name("num_threads")
-        .short("j")
-        .takes_value(true)
-        .validator(is_a::<u32>)
-        .help("How many processes to run in parallel");
-
-    let server = SubCommand::with_name("server")
-        .arg(socket_path.clone())
-        .arg(num_threads.clone())
-        .help_short("Starts a server");
-
-    let stop = Arg::with_name("stop_server")
-        .short("s")
-        .long("stop-server")
-        .help("Stops the server");
-
-    let config = SubCommand::with_name("config")
-        .arg(socket_path.clone())
-        .arg(num_threads)
-        .arg(stop);
-
-    let cmd = Arg::with_name("cmd")
-        .multiple(true)
-        .allow_hyphen_values(true)
-        .last(true);
-
-    return App::new("Parallel")
-        .version("0.1")
-        .author("Cyrill Burgener <cyrill.burgener@gmail.com>")
-        .about("Run your commands in parallel.")
-        .arg(socket_path)
-        .arg(cmd)
-        .subcommand(server)
-        .subcommand(config)
-        .get_matches();
-}
-
-enum Operation {
+#[derive(Debug, StructOpt)]
+#[structopt(rename_all = "kebab-case")]
+pub enum Operation {
+    /// Configure the server
     Server {
-        socket_path: String,
-        config: peer::Config,
+        #[structopt(flatten)]
+        op: ServerOp,
     },
-    Client {
-        socket_path: String,
-        msg: peer::Msg,
+    /// Submit a command to the server
+    Cmd {
+        #[structopt(flatten)]
+        op: CmdOp,
+    },
+    /// Wait for the completion of several commands
+    Wait {
+        #[structopt(flatten)]
+        op: WaitOp,
     },
 }
 
-fn decode_args<'a>(matches: clap::ArgMatches<'a>) -> Option<Operation> {
-    if let Some(matches) = matches.subcommand_matches("server") {
-        let socket_path = matches.value_of("socket_path").unwrap().to_owned();
-        let num_threads = matches
-            .value_of("num_threads")
-            .unwrap()
-            .parse::<u32>()
-            .unwrap();
-
-        let config = peer::Config { num_threads };
-        return Some(Operation::Server {
-            socket_path,
-            config,
-        });
-    } else if let Some(matches) = matches.subcommand_matches("config") {
-        let socket_path = matches.value_of("socket_path").unwrap().to_owned();
-        let num_threads = matches
-            .value_of("num_threads")
-            .map(|v| v.parse::<u32>().unwrap());
-        let exit_requested = matches.is_present("stop_server");
-
-        let msg = peer::Msg::Config(peer::ConfigMsg {
-            num_threads,
-            exit_requested,
-        });
-        return Some(Operation::Client { socket_path, msg });
-    } else {
-        let socket_path = matches.value_of("socket_path").unwrap().to_owned();
-        let cmd_opt = matches.values_of("cmd");
-        let args: Vec<String> = match cmd_opt {
-            None => return None,
-            Some(values) => values.map(|s| s.to_owned()).collect(),
-        };
-
-        if args.is_empty() {
-            warn!("No command given");
-            return None;
-        } else {
-            let msg = peer::Msg::Cmd(peer::CmdMsg { args });
-            return Some(Operation::Client { socket_path, msg });
-        }
-    }
+#[derive(Debug, StructOpt, Serialize, Deserialize)]
+#[structopt(rename_all = "kebab-case")]
+pub struct CmdOp {
+    /// The file path where stdout is written to
+    #[structopt(short = "o", long = "out", parse(from_os_str))]
+    out_file: Option<PathBuf>,
+    /// The file path where stderr is written to
+    #[structopt(short = "e", long = "err", parse(from_os_str))]
+    err_file: Option<PathBuf>,
+    /// The file path where stdin is read from
+    #[structopt(short = "i", long = "in", parse(from_os_str))]
+    in_file: Option<PathBuf>,
+    /// The command to be run on the server
+    #[structopt(
+        short = "-",
+        raw(allow_hyphen_values = "true", last = "true", required = "true")
+    )]
+    cmd: Vec<String>,
 }
+
+#[derive(Debug, StructOpt, Serialize, Deserialize)]
+#[structopt(rename_all = "kebab-case")]
+pub struct ServerOp {
+    /// Start or restart a server
+    #[structopt(long = "start")]
+    start: bool,
+    /// Stop the server
+    #[structopt(long = "stop")]
+    stop: bool,
+    /// How many processes to run in parallel
+    #[structopt(short = "j", long = "num-threads")]
+    num_threads: Option<u32>,
+}
+
+#[derive(Debug, StructOpt, Serialize, Deserialize)]
+#[structopt(rename_all = "kebab-case")]
+pub struct WaitOp {}
 
 fn main() -> Result<()> {
-    env_logger::init();
-    let matches = parse_args();
-
-    let op = match decode_args(matches) {
-        Some(op) => op,
-        None => return Ok(()),
-    };
-
-    return match op {
-        Operation::Server {
-            socket_path,
-            config,
-        } => peer::run_server(socket_path, config),
-        Operation::Client { socket_path, msg } => peer::run_client(socket_path, msg),
-    };
+    let opt = Opt::from_args();
+    debug!("{:?}", opt);
+    return comm::execute_operation(opt.socket_path, opt.op);
 }
