@@ -3,6 +3,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::os::unix::net;
 use std::path::Path;
+use std::fmt;
 
 use super::error::{Error, Result};
 use super::exec;
@@ -68,13 +69,15 @@ impl Connection {
         return Ok(client);
     }
 
-    fn transmit<M: Serialize>(&self, msg: &M) -> Result<()> {
+    fn transmit<M: Serialize + fmt::Debug>(&self, msg: &M) -> Result<()> {
+        debug!("Sending message: {:?}", msg);
         bincode::serialize_into(&self.connection, &msg)?;
         return Ok(());
     }
 
-    fn receive<M: DeserializeOwned>(&self) -> Result<M> {
+    fn receive<M: DeserializeOwned + fmt::Debug>(&self) -> Result<M> {
         let msg = bincode::deserialize_from(&self.connection)?;
+        debug!("Received message: {:?}", msg);
         return Ok(msg);
     }
 }
