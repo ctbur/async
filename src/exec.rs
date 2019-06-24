@@ -1,14 +1,14 @@
-use log::{error, info};
+use log::info;
+use std::collections::HashMap;
 use std::collections::VecDeque;
-use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
-use std::{process, sync, thread};
+use std::{process, thread};
 use threadpool;
 
-use super::comm;
-use super::error::{Error, Result};
+use super::error::{Error, Result, ResultExt};
+use super::{comm, error};
 use super::{CmdOp, ServerOp, WaitOp};
 
 pub fn start_server<P: AsRef<Path>>(socket_path: P, op: ServerOp) -> Result<libc::pid_t> {
@@ -18,8 +18,8 @@ pub fn start_server<P: AsRef<Path>>(socket_path: P, op: ServerOp) -> Result<libc
     let pid = unsafe {
         fork(|| {
             let exec_handle = Executor::start(config);
-            comm::run_server(socket_path, exec_handle).unwrap();
-            // TODO: log result
+            let res = comm::run_server(socket_path, exec_handle);
+            error::report(res);
         })?
     };
 
@@ -35,7 +35,7 @@ enum ExecutorOp {
     Config(ServerOp),
     Cmd(CmdOp),
     Wait(WaitOp),
-    TaskRequest(TaskId, mpsc::Sender<process::Child>),
+    TaskRequest(TaskId, mpsc::Sender<Result<process::Child>>),
     TaskReport(TaskId, TaskResult),
 }
 
@@ -95,10 +95,9 @@ impl Executor {
                 }
                 ExecutorOp::TaskRequest(task_id, sender) => {
                     let cmd = self.work_plan.view_task(task_id);
+                    let child_res = start_cmd(cmd);
                     // TODO: remove unwrap
-                    let child = start_cmd(cmd).unwrap();
-                    // TODO: remove unwrap
-                    sender.send(child).unwrap();
+                    sender.send(child_res).unwrap();
                 }
                 ExecutorOp::TaskReport(task_id, result) => {
                     self.work_plan.report_result(task_id, result);
@@ -135,14 +134,14 @@ fn execute_task(task_id: TaskId, exec_sender: Arc<Mutex<ExecSender>>) {
         .unwrap();
 
     // TODO: remove unwrap
-    let mut child = receiver.recv().unwrap();
-    let exit_status = child.wait();
+    let child_res = receiver.recv().unwrap();
+    let exit_status = child_res.and_then(|mut child| Ok(child.wait()?));
 
     // TODO: remove unwraps
     exec_sender
         .lock()
         .unwrap()
-        .send(ExecutorOp::TaskReport(task_id, TaskResult))
+        .send(ExecutorOp::TaskReport(task_id, exit_status))
         .unwrap();
 }
 
@@ -179,9 +178,10 @@ impl ExecutorHandle {
             .unwrap();
     }
 
-    pub fn stop(&self) {
+    pub fn stop(self) {
         // TODO: remove unwraps
         self.sender.lock().unwrap().send(ExecutorOp::Stop).unwrap();
+        self.handle.join().expect("execution thread panic");
     }
 }
 
@@ -192,8 +192,7 @@ struct WorkPlan {
 }
 
 type TaskId = u64;
-
-struct TaskResult;
+type TaskResult = Result<process::ExitStatus>;
 
 impl WorkPlan {
     fn new() -> Self {
@@ -229,18 +228,20 @@ fn start_cmd(op: &CmdOp) -> Result<process::Child> {
     let (bin, args) = op.cmd[..].split_first().unwrap();
 
     // TODO: redirect stdout, stderr and write to stdin
-    let cmd_proc = process::Command::new(bin).args(args).spawn();
+    let cmd_proc = process::Command::new(bin)
+        .args(args)
+        .spawn()
+        .with_context(format!("Started command: {}", op.cmd.join(" ")))?;
     info!("Started command: {}", op.cmd.join(" "));
 
-    // TODO: error handling
-    return Ok(cmd_proc.unwrap());
+    return Ok(cmd_proc);
 }
 
 unsafe fn fork<F: FnOnce()>(func: F) -> Result<libc::pid_t> {
     let pid = libc::fork();
 
     if pid < 0 {
-        // TODO: return error
+        return Err(Error::with_context("failure during fork"));
     } else if pid == 0 {
         func();
         libc::exit(0);

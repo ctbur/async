@@ -3,8 +3,6 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use structopt::StructOpt;
 
-use error::Result;
-
 mod comm;
 mod error;
 mod exec;
@@ -83,9 +81,11 @@ pub struct ServerOp {
 #[structopt(rename_all = "kebab-case")]
 pub struct WaitOp {}
 
-fn main() -> Result<()> {
+fn main() {
     env_logger::init();
     let opt = Opt::from_args();
-    debug!("{:?}", opt);
-    return comm::execute_operation(opt.socket_path, opt.op);
+    debug!("CLI options: {:?}", opt);
+
+    let res = comm::execute_operation(opt.socket_path, opt.op);
+    error::report(res);
 }

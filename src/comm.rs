@@ -5,7 +5,7 @@ use std::fmt;
 use std::os::unix::net;
 use std::path::Path;
 
-use super::error::{Error, Result};
+use super::error::{Result, ResultExt};
 use super::exec;
 use super::{CmdOp, Operation, ServerOp, WaitOp};
 
@@ -19,10 +19,9 @@ pub fn execute_operation<P: AsRef<Path>>(socket_path: P, op: Operation) -> Resul
 
 fn execute_server_op<P: AsRef<Path>>(socket_path: P, op: ServerOp) -> Result<()> {
     if op.start || op.stop {
-        // try stop server by communication, otherwise kill
-        // Problems: timeout, error reporting
-        //let client = Client::connect(socket_path, Protocol::Cmd)?;
-        //client.transmit(&op)?;
+        // send stop command, fail silently
+        let _ = Connection::connect(&socket_path, Protocol::Stop)?;
+        // TODO: try to kill server?
     }
     if op.start {
         let pid = exec::start_server(&socket_path, op)?;
@@ -63,7 +62,8 @@ struct Connection {
 impl Connection {
     fn connect<P: AsRef<Path>>(socket_path: P, protocol: Protocol) -> Result<Self> {
         let client = Self {
-            connection: net::UnixStream::connect(socket_path)?,
+            connection: net::UnixStream::connect(socket_path)
+                .with_context("Unable to open connection to server")?,
         };
         client.transmit(&protocol)?;
         return Ok(client);
@@ -71,25 +71,22 @@ impl Connection {
 
     fn transmit<M: Serialize + fmt::Debug>(&self, msg: &M) -> Result<()> {
         debug!("Sending message: {:?}", msg);
-        bincode::serialize_into(&self.connection, &msg)?;
+        bincode::serialize_into(&self.connection, &msg).with_context("Socket write error")?;
         return Ok(());
     }
 
     fn receive<M: DeserializeOwned + fmt::Debug>(&self) -> Result<M> {
-        let msg = bincode::deserialize_from(&self.connection)?;
+        let msg = bincode::deserialize_from(&self.connection).with_context("Socket read error")?;
         debug!("Received message: {:?}", msg);
         return Ok(msg);
     }
 }
 
-pub fn run_server<P: AsRef<Path>>(
-    socket_path: P,
-    mut executor: exec::ExecutorHandle,
-) -> Result<()> {
+pub fn run_server<P: AsRef<Path>>(socket_path: P, executor: exec::ExecutorHandle) -> Result<()> {
     let server = Server::create(socket_path)?;
 
     loop {
-        let mut conn = server.accept()?;
+        let conn = server.accept()?;
 
         let protocol: Protocol = conn.receive()?;
         debug!("Using protocol {:?}", protocol);
@@ -123,36 +120,17 @@ struct Server {
 
 impl Server {
     fn create<P: AsRef<Path>>(socket_path: P) -> Result<Server> {
-        let socket = net::UnixListener::bind(socket_path)?;
+        let socket =
+            net::UnixListener::bind(socket_path).with_context("Unable to create socket")?;
         return Ok(Server { socket });
     }
 
     fn accept(&self) -> Result<Connection> {
-        let (connection, addr) = self.socket.accept()?;
+        let (connection, addr) = self
+            .socket
+            .accept()
+            .with_context("Unable to open connection to client")?;
         debug!("Client connected from address {:?}", addr);
         return Ok(Connection { connection });
     }
-
-    /*fn run(&mut self) -> Result<()> {
-        let mut consec_errs = 0;
-        while consec_errs < MAX_CONSEC_ERRS && !self.exit_requested {
-            let res = self.handle_client();
-            match res {
-                Ok(_) => {
-                    consec_errs = 0;
-                    debug!("Successfully handled client");
-                }
-                Err(err) => {
-                    consec_errs + 1;
-                    error!("{}", err);
-                }
-            }
-        }
-
-        return if consec_errs >= MAX_CONSEC_ERRS {
-            Err(Error::MaxConsecErrs())
-        } else {
-            Ok(())
-        };
-    }*/
 }
