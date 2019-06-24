@@ -16,3 +16,4 @@ env_logger = "0.6.1"
 
 libc = "0.2.58"
 num_cpus = "1.10.1"
+threadpool = "1.7.1"

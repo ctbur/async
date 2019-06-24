@@ -1,7 +1,11 @@
 use log::{error, info};
 use std::collections::VecDeque;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
-use std::process;
+use std::sync::mpsc;
+use std::sync::{Arc, Mutex};
+use std::{process, sync, thread};
+use threadpool;
 
 use super::comm;
 use super::error::{Error, Result};
@@ -13,12 +17,8 @@ pub fn start_server<P: AsRef<Path>>(socket_path: P, op: ServerOp) -> Result<libc
 
     let pid = unsafe {
         fork(|| {
-            let executor = Executor {
-                config,
-                cmd_queue: VecDeque::new(),
-                active_processes: Vec::new(),
-            };
-            comm::run_server(socket_path, executor).unwrap();
+            let exec_handle = Executor::start(config);
+            comm::run_server(socket_path, exec_handle).unwrap();
             // TODO: log result
         })?
     };
@@ -30,55 +30,202 @@ struct Config {
     num_threads: usize,
 }
 
-pub struct Executor {
+enum ExecutorOp {
+    Stop,
+    Config(ServerOp),
+    Cmd(CmdOp),
+    Wait(WaitOp),
+    TaskRequest(TaskId, mpsc::Sender<process::Child>),
+    TaskReport(TaskId, TaskResult),
+}
+
+type ExecSender = mpsc::Sender<ExecutorOp>;
+type ExecReceiver = mpsc::Receiver<ExecutorOp>;
+
+struct Executor {
     config: Config,
-    cmd_queue: VecDeque<CmdOp>,
-    active_processes: Vec<process::Child>,
+    threadpool: threadpool::ThreadPool,
+    sender: Arc<Mutex<ExecSender>>,
+    receiver: ExecReceiver,
+    work_plan: WorkPlan,
 }
 
 impl Executor {
-    pub fn run_cmd(&mut self, op: CmdOp) {
-        if op.cmd.is_empty() {
-            error!("Empty command received");
-            return;
-        }
+    fn start(config: Config) -> ExecutorHandle {
+        let threadpool = threadpool::ThreadPool::new(config.num_threads);
+        let (sender, receiver) = mpsc::channel();
 
-        self.cmd_queue.push_back(op);
-        self.dispatch_cmds();
+        let exec = Self {
+            config,
+            threadpool,
+            sender: Arc::new(Mutex::new(sender)),
+            receiver,
+            work_plan: WorkPlan::new(),
+        };
+
+        let sender_ret = exec.sender.clone();
+        let handle = thread::spawn(move || exec.run());
+
+        return ExecutorHandle {
+            handle,
+            sender: sender_ret,
+        };
     }
 
-    fn dispatch_cmds(&mut self) {
-        while self.active_processes.len() < self.config.num_threads {
-            let op_opt = self.cmd_queue.pop_front();
+    fn run(mut self) {
+        let mut stop_requested = false;
 
-            if let Some(op) = op_opt {
-                let child = start_cmd(op).unwrap();
-                self.active_processes.push(child);
-            } else {
-                break;
+        while !stop_requested {
+            // TODO: remove unwrap
+            let op = self.receiver.recv().unwrap();
+
+            match op {
+                ExecutorOp::Stop => {
+                    stop_requested = true;
+                    // TODO
+                }
+                ExecutorOp::Cmd(op) => {
+                    self.run_cmd(op);
+                }
+                ExecutorOp::Config(op) => {
+                    self.reconfigure(op);
+                }
+                ExecutorOp::Wait(op) => {
+                    self.wait(op);
+                }
+                ExecutorOp::TaskRequest(task_id, sender) => {
+                    let cmd = self.work_plan.view_task(task_id);
+                    // TODO: remove unwrap
+                    let child = start_cmd(cmd).unwrap();
+                    // TODO: remove unwrap
+                    sender.send(child).unwrap();
+                }
+                ExecutorOp::TaskReport(task_id, result) => {
+                    self.work_plan.report_result(task_id, result);
+                }
             }
         }
     }
 
-    pub fn reconfigure(&mut self, op: ServerOp) {
-        if let Some(num_threads) = op.num_threads {
-            self.config.num_threads = num_threads;
-        }
+    fn run_cmd(&mut self, op: CmdOp) {
+        let task_id = self.work_plan.enqueue_task(op);
+        let exec_sender = self.sender.clone();
+
+        self.threadpool
+            .execute(move || execute_task(task_id, exec_sender));
     }
 
-    pub fn wait(&mut self, op: WaitOp) {
-        // whenever a process ends, start a new one
+    fn reconfigure(&mut self, op: ServerOp) {
+        // TODO
     }
 
-    pub fn stop(&mut self) {
-        for child in &mut self.active_processes {
-            // TODO: save exit status for query
-            child.kill().unwrap();
-        }
+    fn wait(&mut self, op: WaitOp) {
+        // TODO
     }
 }
 
-fn start_cmd(op: CmdOp) -> Result<process::Child> {
+fn execute_task(task_id: TaskId, exec_sender: Arc<Mutex<ExecSender>>) {
+    let (sender, receiver) = mpsc::channel();
+
+    // TODO: remove unwraps
+    exec_sender
+        .lock()
+        .unwrap()
+        .send(ExecutorOp::TaskRequest(task_id, sender))
+        .unwrap();
+
+    // TODO: remove unwrap
+    let mut child = receiver.recv().unwrap();
+    let exit_status = child.wait();
+
+    // TODO: remove unwraps
+    exec_sender
+        .lock()
+        .unwrap()
+        .send(ExecutorOp::TaskReport(task_id, TaskResult))
+        .unwrap();
+}
+
+pub struct ExecutorHandle {
+    handle: thread::JoinHandle<()>,
+    sender: Arc<Mutex<ExecSender>>,
+}
+
+impl ExecutorHandle {
+    pub fn run_cmd(&self, op: CmdOp) {
+        // TODO: remove unwraps
+        self.sender
+            .lock()
+            .unwrap()
+            .send(ExecutorOp::Cmd(op))
+            .unwrap();
+    }
+
+    pub fn reconfigure(&self, op: ServerOp) {
+        // TODO: remove unwraps
+        self.sender
+            .lock()
+            .unwrap()
+            .send(ExecutorOp::Config(op))
+            .unwrap();
+    }
+
+    pub fn wait(&self, op: WaitOp) {
+        // TODO: remove unwraps
+        self.sender
+            .lock()
+            .unwrap()
+            .send(ExecutorOp::Wait(op))
+            .unwrap();
+    }
+
+    pub fn stop(&self) {
+        // TODO: remove unwraps
+        self.sender.lock().unwrap().send(ExecutorOp::Stop).unwrap();
+    }
+}
+
+struct WorkPlan {
+    task_id_counter: TaskId,
+    queued_tasks: HashMap<TaskId, CmdOp>,
+    finished_tasks: VecDeque<(CmdOp, TaskResult)>,
+}
+
+type TaskId = u64;
+
+struct TaskResult;
+
+impl WorkPlan {
+    fn new() -> Self {
+        Self {
+            task_id_counter: 0,
+            queued_tasks: HashMap::new(),
+            finished_tasks: VecDeque::new(),
+        }
+    }
+
+    fn enqueue_task(&mut self, task: CmdOp) -> TaskId {
+        let new_id = self.task_id_counter;
+        self.task_id_counter += 1;
+
+        self.queued_tasks.insert(new_id, task);
+        return new_id;
+    }
+
+    fn view_task(&self, task_id: TaskId) -> &CmdOp {
+        &self.queued_tasks.get(&task_id).unwrap()
+    }
+
+    fn report_result(&mut self, task_id: TaskId, res: TaskResult) {
+        let cmd_op = self
+            .queued_tasks
+            .remove(&task_id)
+            .expect("reporting results for inactive task");
+        self.finished_tasks.push_back((cmd_op, res));
+    }
+}
+
+fn start_cmd(op: &CmdOp) -> Result<process::Child> {
     let (bin, args) = op.cmd[..].split_first().unwrap();
 
     // TODO: redirect stdout, stderr and write to stdin

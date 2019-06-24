@@ -1,9 +1,9 @@
 use log::{debug, info};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use std::fmt;
 use std::os::unix::net;
 use std::path::Path;
-use std::fmt;
 
 use super::error::{Error, Result};
 use super::exec;
@@ -82,7 +82,10 @@ impl Connection {
     }
 }
 
-pub fn run_server<P: AsRef<Path>>(socket_path: P, mut executor: exec::Executor) -> Result<()> {
+pub fn run_server<P: AsRef<Path>>(
+    socket_path: P,
+    mut executor: exec::ExecutorHandle,
+) -> Result<()> {
     let server = Server::create(socket_path)?;
 
     loop {
