@@ -1,9 +1,9 @@
 use log::{debug, info};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use std::fmt;
 use std::os::unix::net;
 use std::path::Path;
+use std::{fmt, fs};
 
 use super::error::{Result, ResultExt};
 use super::exec;
@@ -18,16 +18,32 @@ pub fn execute_operation<P: AsRef<Path>>(socket_path: P, op: Operation) -> Resul
 }
 
 fn execute_server_op<P: AsRef<Path>>(socket_path: P, op: ServerOp) -> Result<()> {
-    if op.start || op.stop {
+    let socket_path = socket_path.as_ref();
+
+    if op.stop {
         // send stop command, fail silently
-        let _ = Connection::connect(&socket_path, Protocol::Stop)?;
-        // TODO: try to kill server?
+        info!("Sending stop to server");
+        let _ = Connection::connect(socket_path, Protocol::Stop)?;
     }
     if op.start {
-        let pid = exec::start_server(&socket_path, op)?;
+        // send stop command, fail silently
+        info!("Trying to send stop command to existing server");
+        let res = Connection::connect(socket_path, Protocol::Stop);
+        match res {
+            Ok(_) => info!("Stopped server"),
+            Err(_) => info!("No server found or unable to stop"),
+        }
+
+        if socket_path.exists() {
+            info!("Removing file at {}", socket_path.display());
+            fs::remove_file(socket_path).with_context("Unable to remove socket")?;
+        }
+
+        let pid = exec::start_server(socket_path, op)?;
         info!("Server running at PID {}", pid);
     } else {
-        let conn = Connection::connect(&socket_path, Protocol::Config)?;
+        info!("Sending configuration to server");
+        let conn = Connection::connect(socket_path, Protocol::Config)?;
         conn.transmit(&op)?;
     }
 
