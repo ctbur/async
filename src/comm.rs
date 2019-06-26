@@ -35,12 +35,14 @@ fn execute_server_op<P: AsRef<Path>>(socket_path: P, op: ServerOp) -> Result<()>
 }
 
 fn execute_cmd_op<P: AsRef<Path>>(socket_path: P, op: CmdOp) -> Result<()> {
+    info!("Sending command to server");
     let conn = Connection::connect(socket_path, Protocol::Cmd)?;
     conn.transmit(&op)?;
     Ok(())
 }
 
 fn execute_wait_op<P: AsRef<Path>>(socket_path: P, op: WaitOp) -> Result<()> {
+    info!("Sending wait to server");
     let conn = Connection::connect(socket_path, Protocol::Wait)?;
     conn.transmit(&op)?;
     // receive response
@@ -61,9 +63,10 @@ struct Connection {
 
 impl Connection {
     fn connect<P: AsRef<Path>>(socket_path: P, protocol: Protocol) -> Result<Self> {
+        info!("Opening socket at {}", socket_path.as_ref().display());
         let client = Self {
             connection: net::UnixStream::connect(socket_path)
-                .with_context("Unable to open connection to server")?,
+                .with_context("Unable to open connection to server on socket")?,
         };
         client.transmit(&protocol)?;
         return Ok(client);
@@ -83,7 +86,7 @@ impl Connection {
 }
 
 pub fn run_server<P: AsRef<Path>>(socket_path: P, executor: exec::ExecutorHandle) -> Result<()> {
-    let server = Server::create(socket_path)?;
+    let server = Server::create(&socket_path)?;
 
     loop {
         let conn = server.accept()?;
@@ -103,9 +106,11 @@ pub fn run_server<P: AsRef<Path>>(socket_path: P, executor: exec::ExecutorHandle
             Protocol::Wait => {
                 let op: WaitOp = conn.receive()?;
                 executor.wait(op);
+                // TODO: send message when wait done
             }
             Protocol::Stop => {
                 executor.stop();
+                // TODO: send message when stopped
                 break;
             }
         }
@@ -120,8 +125,9 @@ struct Server {
 
 impl Server {
     fn create<P: AsRef<Path>>(socket_path: P) -> Result<Server> {
+        info!("Creating socket at {}", socket_path.as_ref().display());
         let socket =
-            net::UnixListener::bind(socket_path).with_context("Unable to create socket")?;
+            net::UnixListener::bind(&socket_path).with_context("Unable to create socket")?;
         return Ok(Server { socket });
     }
 

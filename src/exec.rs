@@ -81,8 +81,8 @@ impl Executor {
 
             match op {
                 ExecutorOp::Stop => {
+                    // TODO: find way to kill running processes
                     stop_requested = true;
-                    // TODO
                 }
                 ExecutorOp::Cmd(op) => {
                     self.run_cmd(op);
@@ -228,11 +228,11 @@ fn start_cmd(op: &CmdOp) -> Result<process::Child> {
     let (bin, args) = op.cmd[..].split_first().unwrap();
 
     // TODO: redirect stdout, stderr and write to stdin
+    info!("Starting command: {}", op.cmd.join(" "));
     let cmd_proc = process::Command::new(bin)
         .args(args)
         .spawn()
-        .with_context(format!("Started command: {}", op.cmd.join(" ")))?;
-    info!("Started command: {}", op.cmd.join(" "));
+        .with_context("Failed to start command")?;
 
     return Ok(cmd_proc);
 }
