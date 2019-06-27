@@ -16,7 +16,8 @@ mod exec;
     rename_all = "kebab-case"
 )]
 pub struct Opt {
-    /// The socket used for communication
+    /// The socket used for communication, can also be provided using the environment
+    /// variable ASYNC_SOCKET
     #[structopt(short = "s", long = "socket", env = "ASYNC_SOCKET", parse(from_os_str))]
     socket_path: PathBuf,
     #[structopt(subcommand)]
