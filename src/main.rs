@@ -17,7 +17,7 @@ mod exec;
 )]
 pub struct Opt {
     /// The socket used for communication
-    #[structopt(short = "s", long = "socket", parse(from_os_str))]
+    #[structopt(short = "s", long = "socket", env = "ASYNC_SOCKET", parse(from_os_str))]
     socket_path: PathBuf,
     #[structopt(subcommand)]
     op: Operation,
