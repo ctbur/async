@@ -9,7 +9,6 @@ repository = "https://github.com/ctbur/async/"
 readme = "README.md"
 keywords = ["parallel", "shell"]
 license = "GPL-3.0-or-later"
-license-file = "LICENSE"
 
 
 [[bin]]
