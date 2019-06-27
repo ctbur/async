@@ -1,6 +1,7 @@
 use log::{debug, info};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
 use std::os::unix::net;
 use std::path::Path;
 use std::{fmt, fs};
@@ -61,7 +62,13 @@ fn execute_wait_op<P: AsRef<Path>>(socket_path: P, op: WaitOp) -> Result<()> {
     info!("Sending wait to server");
     let conn = Connection::connect(socket_path, Protocol::Wait)?;
     conn.transmit(&op)?;
-    // receive response
+    let results: TaskResultsSer = conn.receive()?;
+
+    for (op, res) in results.into_iter() {
+        if let Err(msg) = res {
+            eprintln!("Command \"{}\" failed: {}", op.cmd.join(" "), msg);
+        }
+    }
     Ok(())
 }
 
@@ -121,8 +128,8 @@ pub fn run_server<P: AsRef<Path>>(socket_path: P, executor: exec::ExecutorHandle
             }
             Protocol::Wait => {
                 let op: WaitOp = conn.receive()?;
-                executor.wait(op);
-                // TODO: send message when wait done
+                let results = executor.wait(op);
+                conn.transmit(&to_task_results_ser(results))?;
             }
             Protocol::Stop => {
                 executor.stop();
@@ -155,4 +162,16 @@ impl Server {
         debug!("Client connected from address {:?}", addr);
         return Ok(Connection { connection });
     }
+}
+
+type TaskResultsSer = VecDeque<(CmdOp, std::result::Result<Option<i32>, String>)>;
+
+fn to_task_results_ser(results: exec::TaskResults) -> TaskResultsSer {
+    results
+        .into_iter()
+        .map(|(op, result)| match result {
+            Ok(exit_status) => (op, Ok(exit_status.code())),
+            Err(err) => (op, Err(format!("{}", err))),
+        })
+        .collect()
 }

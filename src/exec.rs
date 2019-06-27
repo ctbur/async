@@ -119,16 +119,17 @@ impl Executor {
         //otherwise delay response until result of final task is reported
         if self.work_plan.is_done() {
             sender.send(TaskResults::new()).unwrap();
+        }
+        if self.waiting.is_none() {
+            self.waiting = Some((op, sender));
         } else {
-            if self.waiting.is_none() {
-                self.waiting = Some((op, sender));
-            } else {
-                error!("Can only wait once at a time");
-            }
+            error!("Can only wait once at a time");
         }
     }
 
     fn task_request(&mut self, task_id: TaskId, sender: Sender<Result<process::Child>>) {
+        info!("Task {} requested", task_id);
+
         let cmd = self.work_plan.view_task(task_id);
         let child_res = start_cmd(cmd);
         // TODO: remove unwrap
@@ -136,11 +137,14 @@ impl Executor {
     }
 
     fn task_report(&mut self, task_id: TaskId, result: TaskResult) {
+        info!("Task {} finished", task_id);
         self.work_plan.report_result(task_id, result);
 
         // if we are done and someone is waiting
-        if let (true, Some((_op, sender))) = (self.work_plan.is_done(), self.waiting.take()) {
-            sender.send(self.work_plan.take_results()).unwrap();
+        if self.work_plan.is_done() && self.waiting.is_some() {
+            let results = self.work_plan.take_results();
+            let (_op, sender) = self.waiting.take().unwrap();
+            sender.send(results).unwrap();
         }
     }
 }
