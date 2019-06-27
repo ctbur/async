@@ -93,20 +93,10 @@ impl Executor {
                     self.wait(op, sender);
                 }
                 ExecutorOp::TaskRequest(task_id, sender) => {
-                    let cmd = self.work_plan.view_task(task_id);
-                    let child_res = start_cmd(cmd);
-                    // TODO: remove unwrap
-                    sender.send(child_res).unwrap();
+                    self.task_request(task_id, sender);
                 }
                 ExecutorOp::TaskReport(task_id, result) => {
-                    self.work_plan.report_result(task_id, result);
-
-                    // if we are done and someone is waiting
-                    if let (true, Some((_op, sender))) =
-                        (self.work_plan.is_done(), self.waiting.take())
-                    {
-                        sender.send(self.work_plan.take_results()).unwrap();
-                    }
+                    self.task_report(task_id, result);
                 }
             }
         }
@@ -135,6 +125,22 @@ impl Executor {
             } else {
                 error!("Can only wait once at a time");
             }
+        }
+    }
+
+    fn task_request(&mut self, task_id: TaskId, sender: Sender<Result<process::Child>>) {
+        let cmd = self.work_plan.view_task(task_id);
+        let child_res = start_cmd(cmd);
+        // TODO: remove unwrap
+        sender.send(child_res).unwrap();
+    }
+
+    fn task_report(&mut self, task_id: TaskId, result: TaskResult) {
+        self.work_plan.report_result(task_id, result);
+
+        // if we are done and someone is waiting
+        if let (true, Some((_op, sender))) = (self.work_plan.is_done(), self.waiting.take()) {
+            sender.send(self.work_plan.take_results()).unwrap();
         }
     }
 }
