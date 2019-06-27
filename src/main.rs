@@ -11,7 +11,7 @@ mod exec;
 #[structopt(
     name = "async",
     about = "Run your shell commands in parallel.",
-    version = "0.1.0",
+    version = "0.1.1",
     author = "Cyrill Burgener <cyrill.burgener@gmail.com>",
     rename_all = "kebab-case"
 )]
