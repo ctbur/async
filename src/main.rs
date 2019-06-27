@@ -9,9 +9,9 @@ mod exec;
 
 #[derive(Debug, StructOpt)]
 #[structopt(
-    name = "parallel",
-    about = "Run your commands in parallel.",
-    version = "0.1",
+    name = "async",
+    about = "Run your shell commands in parallel.",
+    version = "0.1.0",
     author = "Cyrill Burgener <cyrill.burgener@gmail.com>",
     rename_all = "kebab-case"
 )]
