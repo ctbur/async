@@ -127,8 +127,7 @@ impl Executor {
         if self.work_plan.is_done() {
             let results = self.work_plan.take_results();
             sender.send(results).unwrap();
-        }
-        if self.waiting.is_none() {
+        } else if self.waiting.is_none() {
             self.waiting = Some((op, sender));
         } else {
             error!("Can only wait once at a time");
