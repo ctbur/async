@@ -1,10 +1,11 @@
-use log::info;
+use log::{error, info};
 use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::path::Path;
 use std::sync::mpsc;
+use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
-use std::{process, thread};
+use std::{mem, process, thread};
 use threadpool;
 
 use super::error::{Error, Result, ResultExt};
@@ -34,7 +35,7 @@ enum ExecutorOp {
     Stop,
     Config(ServerOp),
     Cmd(CmdOp),
-    Wait(WaitOp),
+    Wait(WaitOp, Sender<TaskResults>),
     TaskRequest(TaskId, mpsc::Sender<Result<process::Child>>),
     TaskReport(TaskId, TaskResult),
 }
@@ -48,6 +49,7 @@ struct Executor {
     sender: Arc<Mutex<ExecSender>>,
     receiver: ExecReceiver,
     work_plan: WorkPlan,
+    waiting: Option<(WaitOp, Sender<TaskResults>)>,
 }
 
 impl Executor {
@@ -61,6 +63,7 @@ impl Executor {
             sender: Arc::new(Mutex::new(sender)),
             receiver,
             work_plan: WorkPlan::new(),
+            waiting: None,
         };
 
         let sender_ret = exec.sender.clone();
@@ -90,8 +93,8 @@ impl Executor {
                 ExecutorOp::Config(op) => {
                     self.reconfigure(op);
                 }
-                ExecutorOp::Wait(op) => {
-                    self.wait(op);
+                ExecutorOp::Wait(op, sender) => {
+                    self.wait(op, sender);
                 }
                 ExecutorOp::TaskRequest(task_id, sender) => {
                     let cmd = self.work_plan.view_task(task_id);
@@ -101,6 +104,13 @@ impl Executor {
                 }
                 ExecutorOp::TaskReport(task_id, result) => {
                     self.work_plan.report_result(task_id, result);
+
+                    // if we are done and someone is waiting
+                    if let (true, Some((_op, sender))) =
+                        (self.work_plan.is_done(), self.waiting.take())
+                    {
+                        sender.send(self.work_plan.take_results()).unwrap();
+                    }
                 }
             }
         }
@@ -118,8 +128,18 @@ impl Executor {
         // TODO
     }
 
-    fn wait(&mut self, op: WaitOp) {
-        // TODO
+    fn wait(&mut self, op: WaitOp, sender: Sender<TaskResults>) {
+        // if work is already done, immediately send a response,
+        //otherwise delay response until result of final task is reported
+        if self.work_plan.is_done() {
+            sender.send(TaskResults::new()).unwrap();
+        } else {
+            if self.waiting.is_none() {
+                self.waiting = Some((op, sender));
+            } else {
+                error!("Can only wait once at a time");
+            }
+        }
     }
 }
 
@@ -169,13 +189,17 @@ impl ExecutorHandle {
             .unwrap();
     }
 
-    pub fn wait(&self, op: WaitOp) {
+    pub fn wait(&self, op: WaitOp) -> TaskResults {
+        let (sender, receiver) = mpsc::channel();
+
         // TODO: remove unwraps
         self.sender
             .lock()
             .unwrap()
-            .send(ExecutorOp::Wait(op))
+            .send(ExecutorOp::Wait(op, sender))
             .unwrap();
+
+        return receiver.recv().unwrap();
     }
 
     pub fn stop(self) {
@@ -191,15 +215,16 @@ struct WorkPlan {
     finished_tasks: VecDeque<(CmdOp, TaskResult)>,
 }
 
+pub type TaskResult = Result<process::ExitStatus>;
+pub type TaskResults = VecDeque<(CmdOp, TaskResult)>;
 type TaskId = u64;
-type TaskResult = Result<process::ExitStatus>;
 
 impl WorkPlan {
     fn new() -> Self {
         Self {
             task_id_counter: 0,
             queued_tasks: HashMap::new(),
-            finished_tasks: VecDeque::new(),
+            finished_tasks: TaskResults::new(),
         }
     }
 
@@ -221,6 +246,14 @@ impl WorkPlan {
             .remove(&task_id)
             .expect("reporting results for inactive task");
         self.finished_tasks.push_back((cmd_op, res));
+    }
+
+    fn is_done(&self) -> bool {
+        self.queued_tasks.is_empty()
+    }
+
+    fn take_results(&mut self) -> TaskResults {
+        mem::replace(&mut self.finished_tasks, TaskResults::new())
     }
 }
 
