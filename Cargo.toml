@@ -8,7 +8,7 @@ description = "A tool to run shell commands in parallel."
 repository = "https://github.com/ctbur/async/"
 readme = "README.md"
 keywords = ["parallel", "shell"]
-license = "GPLv3"
+license = "GPL-3.0-or-later"
 license-file = "LICENSE"
 
 
