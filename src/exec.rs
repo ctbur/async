@@ -111,7 +111,14 @@ impl Executor {
     }
 
     fn reconfigure(&mut self, op: ServerOp) {
-        // TODO
+        if let Some(num_threads) = op.num_threads {
+            info!(
+                "Changing from {} to {} threads",
+                self.config.num_threads, num_threads
+            );
+            self.config.num_threads = num_threads;
+            self.threadpool.set_num_threads(num_threads);
+        }
     }
 
     fn wait(&mut self, op: WaitOp, sender: Sender<TaskResults>) {
