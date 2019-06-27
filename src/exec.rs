@@ -2,8 +2,7 @@ use log::{error, info};
 use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::path::Path;
-use std::sync::mpsc;
-use std::sync::mpsc::{Receiver, Sender};
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::{mem, process, thread};
 use threadpool;
@@ -36,18 +35,15 @@ enum ExecutorOp {
     Config(ServerOp),
     Cmd(CmdOp),
     Wait(WaitOp, Sender<TaskResults>),
-    TaskRequest(TaskId, mpsc::Sender<Result<process::Child>>),
+    TaskRequest(TaskId, Sender<Result<process::Child>>),
     TaskReport(TaskId, TaskResult),
 }
-
-type ExecSender = mpsc::Sender<ExecutorOp>;
-type ExecReceiver = mpsc::Receiver<ExecutorOp>;
 
 struct Executor {
     config: Config,
     threadpool: threadpool::ThreadPool,
-    sender: Arc<Mutex<ExecSender>>,
-    receiver: ExecReceiver,
+    sender: Arc<Mutex<Sender<ExecutorOp>>>,
+    receiver: Receiver<ExecutorOp>,
     work_plan: WorkPlan,
     waiting: Option<(WaitOp, Sender<TaskResults>)>,
 }
@@ -143,7 +139,7 @@ impl Executor {
     }
 }
 
-fn execute_task(task_id: TaskId, exec_sender: Arc<Mutex<ExecSender>>) {
+fn execute_task(task_id: TaskId, exec_sender: Arc<Mutex<Sender<ExecutorOp>>>) {
     let (sender, receiver) = mpsc::channel();
 
     // TODO: remove unwraps
@@ -167,7 +163,7 @@ fn execute_task(task_id: TaskId, exec_sender: Arc<Mutex<ExecSender>>) {
 
 pub struct ExecutorHandle {
     handle: thread::JoinHandle<()>,
-    sender: Arc<Mutex<ExecSender>>,
+    sender: Arc<Mutex<Sender<ExecutorOp>>>,
 }
 
 impl ExecutorHandle {
