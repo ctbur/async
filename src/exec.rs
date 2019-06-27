@@ -4,7 +4,7 @@ use std::collections::VecDeque;
 use std::path::Path;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
-use std::{mem, process, thread};
+use std::{fs, mem, process, thread};
 use threadpool;
 
 use super::error::{Error, Result, ResultExt};
@@ -125,7 +125,8 @@ impl Executor {
         // if work is already done, immediately send a response,
         //otherwise delay response until result of final task is reported
         if self.work_plan.is_done() {
-            sender.send(TaskResults::new()).unwrap();
+            let results = self.work_plan.take_results();
+            sender.send(results).unwrap();
         }
         if self.waiting.is_none() {
             self.waiting = Some((op, sender));
@@ -150,6 +151,7 @@ impl Executor {
         // if we are done and someone is waiting
         if self.work_plan.is_done() && self.waiting.is_some() {
             let results = self.work_plan.take_results();
+            // send results and clear waiting
             let (_op, sender) = self.waiting.take().unwrap();
             sender.send(results).unwrap();
         }
@@ -275,10 +277,24 @@ fn start_cmd(op: &CmdOp) -> Result<process::Child> {
 
     // TODO: redirect stdout, stderr and write to stdin
     info!("Starting command: {}", op.cmd.join(" "));
-    let cmd_proc = process::Command::new(bin)
-        .args(args)
-        .spawn()
-        .with_context("Failed to start command")?;
+    let mut cmd = process::Command::new(bin);
+    cmd.args(args);
+
+    // connect stdout, stderr and stdin if requested
+    if let Some(ref out_path) = op.out_file {
+        let out_file = fs::File::create(out_path)?;
+        cmd.stdout(out_file);
+    }
+    if let Some(ref err_path) = op.err_file {
+        let err_file = fs::File::create(err_path)?;
+        cmd.stderr(err_file);
+    }
+    if let Some(ref in_path) = op.in_file {
+        let in_file = fs::File::create(in_path)?;
+        cmd.stdin(in_file);
+    }
+
+    let cmd_proc = cmd.spawn().with_context("Failed to start command")?;
 
     return Ok(cmd_proc);
 }
