@@ -1,8 +1,12 @@
 [package]
-name = "parallel"
+name = "async-cmd"
 version = "0.1.0"
 authors = ["Cyrill Burgener <cyrill.burgener@gmail.com>"]
 edition = "2018"
+
+[[bin]]
+name = "async"
+path = "src/main.rs"
 
 [dependencies]
 clap = "2.33.0"
