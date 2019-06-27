@@ -3,6 +3,14 @@ name = "async-cmd"
 version = "0.1.0"
 authors = ["Cyrill Burgener <cyrill.burgener@gmail.com>"]
 edition = "2018"
+description = "A tool to run shell commands in parallel."
+
+repository = "https://github.com/ctbur/async/"
+readme = "README.md"
+keywords = ["parallel", "shell"]
+license = "GPLv3"
+license-file = "LICENSE"
+
 
 [[bin]]
 name = "async"
