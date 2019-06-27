@@ -42,4 +42,4 @@ If you encounter an unexpected error or crash, please turn on logging by setting
 
 ## Installation
 
-`async` can be installed using cargo with `cargo install async-exec` or from the AUR.
+`async` can be installed using cargo with `cargo install async-cmd` or from the AUR.
