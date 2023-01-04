@@ -281,13 +281,19 @@ fn start_cmd(op: &CmdOp) -> Result<process::Child> {
 
     // connect stdout, stderr and stdin if requested
     if let Some(ref out_path) = op.out_file {
-        let out_file = fs::File::create(out_path)?;
+        let out_file = fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .append(true)
+            .open(out_path)?;
         cmd.stdout(out_file);
     }
+
     if let Some(ref err_path) = op.err_file {
         let err_file = fs::File::create(err_path)?;
         cmd.stderr(err_file);
     }
+
     if let Some(ref in_path) = op.in_file {
         let in_file = fs::File::create(in_path)?;
         cmd.stdin(in_file);
